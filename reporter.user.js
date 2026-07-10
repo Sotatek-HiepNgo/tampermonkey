@@ -23,8 +23,8 @@
 // @connect      webhook.site
 // @connect      your-internal-api.company.com
 // @run-at       document-idle
-// @updateURL    https://YOUR-VERCEL-PROJECT.vercel.app/issue-reporter.user.js
-// @downloadURL  https://YOUR-VERCEL-PROJECT.vercel.app/issue-reporter.user.js
+// @updateURL    https://tampermonkey-five.vercel.app/reporter.user.js
+// @downloadURL  https://tampermonkey-five.vercel.app/reporter.user.js
 // ==/UserScript==
 
 (function () {
