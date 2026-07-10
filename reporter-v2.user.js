@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Internal Issue Reporter
 // @namespace    internal-issue-reporter
-// @version      1.1.0
+// @version      2.0.0
 // @description  Floating report button: capture a real screenshot via getDisplayMedia(), add a description, and send it to your internal API. No per-repo code changes needed — just add domains to @match below. Uses safe DOM construction (no innerHTML) so it also works on pages with strict Trusted Types CSP, like Gmail.
 // @author       you
 // @include      https://*.github.com/*
