@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         Internal Issue Reporter (v2.0.1)
+// @name         Internal Issue Reporter (v2.1.0)
 // @namespace    internal-issue-reporter
-// @version      2.0.1
-// @description  Floating report button: capture a real screenshot via getDisplayMedia(), add a description, and send it to your internal API. No per-repo code changes needed — just add domains to @match below. Uses safe DOM construction (no innerHTML) so it also works on pages with strict Trusted Types CSP, like Gmail.
-// @author       you
+// @version      2.1.0
+// @description  Floating report button: capture a real screenshot via getDisplayMedia(), add a description, and send it to your internal API as multipart FormData. No per-repo code changes needed — just add domains to @match below. Uses safe DOM construction (no innerHTML) so it also works on pages with strict Trusted Types CSP, like Gmail.
+// @author       secret
 // @include      https://*.github.com/*
 // @include      https://*.stackoverflow.com/*
 // @match        https://dev.internal-crm.com/*
@@ -14,7 +14,6 @@
 // @match        https://docs.google.com/spreadsheets/*
 // @match        https://portal.sotatek.com/*
 // @exclude      https://portal.sotatek.com/admin/*
-// @exclude      https://mail.google.com/mail/u/0/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -33,17 +32,13 @@
   const NS = "issue-reporter-tm";
   let modalOpen = false;
 
-  // ---------------------------------------------------------------------
-  // Hardcoded API endpoint. Sửa dòng dưới đây thành URL API nội bộ thật,
-  // sau đó nhớ cập nhật @connect ở phần metadata phía trên cho khớp domain.
-  // ---------------------------------------------------------------------
+  // update @connect metadata is correct with domain of API URL
   const API_URL = "https://webhook.site/cd43d00f-bba5-40a8-8e08-6f526a122c94";
 
-  // ---------------------------------------------------------------------
   // Small safe DOM builder — avoids innerHTML entirely so this also works
   // on pages that enforce Trusted Types (e.g. Gmail), which throw on any
   // raw innerHTML/outerHTML string assignment.
-  // ---------------------------------------------------------------------
+
   function h(tag, attrs, children) {
     const node = document.createElement(tag);
     attrs = attrs || {};
@@ -70,10 +65,9 @@
   injectStyles();
   mountFloatingButton();
 
-  // ---------------------------------------------------------------------
   // Styles — GM_addStyle sets .textContent on a <style> tag internally,
   // which Trusted Types does not restrict, so this is safe as-is.
-  // ---------------------------------------------------------------------
+
   function injectStyles() {
     GM_addStyle(`
       .${NS}-fab {
@@ -139,7 +133,7 @@
         type: "button",
         "aria-label": "Report issue",
       },
-      [h("span", { text: "🚨" }), h("span", { text: "Report" })],
+      [h("span", { text: "" }), h("span", { text: "Report" })],
     );
     btn.addEventListener("click", onReportClick);
     document.body.appendChild(btn);
@@ -168,7 +162,6 @@
     openModal(screenshot, lastUserName);
   }
 
-  // ---------------------------------------------------------------------
   // Screenshot via the Screen Capture API. This captures real rendered
   // pixels (like a native screenshot) rather than re-rendering the DOM, so
   // it correctly handles <canvas>-based UIs (e.g. Google Sheets) and is not
@@ -178,7 +171,7 @@
   // "this tab / a window / the entire screen" and confirm sharing — this
   // cannot be skipped or pre-selected for privacy/security reasons. Only
   // one video frame is grabbed, then the capture is stopped immediately.
-  // ---------------------------------------------------------------------
+
   async function captureScreenshot() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
       console.error(
@@ -242,6 +235,19 @@
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
     } catch (e) {
       console.error("[Issue Reporter] could not open screenshot preview", e);
+    }
+  }
+
+  // Converts a data: URL (from canvas.toDataURL) into a Blob so it can be
+  // appended to FormData as a real file part, instead of a giant base64
+  // text field. Falls back to null on failure (e.g. malformed data URL).
+  async function dataUrlToBlob(dataUrl) {
+    try {
+      const res = await fetch(dataUrl);
+      return await res.blob();
+    } catch (e) {
+      console.error("[Issue Reporter] failed to convert screenshot to Blob", e);
+      return null;
     }
   }
 
@@ -322,7 +328,7 @@
       },
       [
         h("div", { class: `${NS}-header` }, [
-          h("h3", { id: `${NS}-title`, text: "🚨 Report an issue" }),
+          h("h3", { id: `${NS}-title`, text: "Report an issue" }),
           closeBtn,
         ]),
         h("div", { class: `${NS}-meta`, text: context.url }),
@@ -388,30 +394,58 @@
     statusEl.textContent = "Sending...";
     statusEl.className = `${NS}-status`;
 
-    const payload = {
-      ...context,
-      userName,
-      description,
-      screenshot: screenshotDataUrl,
-    };
     await GM_setValue("lastUserName", userName);
 
-    // Chưa sửa API_URL thật (vẫn còn placeholder) — báo lỗi ngay, không gửi đi đâu cả.
+    // Real API_URL has not been configured yet (still using the placeholder)
+    // — report an error immediately and do not send any request.
     if (!API_URL || API_URL.includes("your-internal-api.company.com")) {
       submitBtn.disabled = false;
-      statusEl.textContent = "API URL chưa được cấu hình trong code.";
+      statusEl.textContent = "API URL has not been configured in the script.";
       statusEl.className = `${NS}-status ${NS}-status--error`;
       alert(
-        "Issue Reporter: API URL chưa được cấu hình. Vui lòng báo cho người quản lý script.",
+        "Issue Reporter: The API URL has not been been configured. Please contact the script administrator.",
       );
       return;
+    }
+
+    // ---------------------------------------------------------------------
+    // Build a multipart/form-data payload instead of JSON. The screenshot
+    // is converted from its base64 data: URL into a real Blob/file part,
+    // which avoids ~33% base64 bloat and lets the backend treat it as an
+    // uploaded file (e.g. req.files.screenshot in multer/formidable etc.).
+    // All other fields are sent as plain form fields (strings).
+    // ---------------------------------------------------------------------
+    const formData = new FormData();
+    formData.append("userName", userName);
+    formData.append("description", description);
+    formData.append("url", context.url);
+    formData.append("title", context.title);
+    formData.append("userAgent", context.userAgent);
+    formData.append("screenWidth", String(context.screenWidth));
+    formData.append("screenHeight", String(context.screenHeight));
+    formData.append("devicePixelRatio", String(context.devicePixelRatio));
+    formData.append("timestamp", context.timestamp);
+
+    if (screenshotDataUrl) {
+      const blob = await dataUrlToBlob(screenshotDataUrl);
+      if (blob) {
+        formData.append("screenshot", blob, "screenshot.png");
+      } else {
+        // Fallback: keep the raw data URL as a text field so nothing is
+        // lost if Blob conversion failed for some reason.
+        formData.append("screenshotDataUrl", screenshotDataUrl);
+      }
     }
 
     GM_xmlhttpRequest({
       method: "POST",
       url: API_URL,
-      headers: { "Content-Type": "application/json" },
-      data: JSON.stringify(payload),
+      // IMPORTANT: do NOT set a "Content-Type" header manually here.
+      // The browser/GM_xmlhttpRequest must generate its own multipart
+      // boundary (e.g. "multipart/form-data; boundary=----WebKit...").
+      // Setting it by hand breaks the boundary and the server will fail
+      // to parse the form.
+      data: formData,
       onload: (res) => {
         submitBtn.disabled = false;
         if (res.status >= 200 && res.status < 300) {
@@ -419,26 +453,26 @@
           statusEl.className = `${NS}-status ${NS}-status--success`;
           setTimeout(closeModal, 1200);
         } else {
-          const msg = `Gửi thất bại: HTTP ${res.status}`;
+          const msg = `Request failed: HTTP ${res.status}`;
           statusEl.textContent = msg;
           statusEl.className = `${NS}-status ${NS}-status--error`;
           alert(
-            `Issue Reporter: ${msg}. Vui lòng thử lại hoặc báo lỗi trực tiếp.`,
+            `Issue Reporter: ${msg}. Please try again or report the issue directly.`,
           );
         }
       },
       onerror: (err) => {
         submitBtn.disabled = false;
-        const msg = `Không thể kết nối API: ${err?.error || "network error"}`;
+        const msg = `Unable to connect to the API: ${err?.error || "network error"}`;
         statusEl.textContent = msg;
         statusEl.className = `${NS}-status ${NS}-status--error`;
         alert(
-          `Issue Reporter: ${msg}. Kiểm tra lại kết nối mạng hoặc báo cho quản trị viên.`,
+          `Issue Reporter: ${msg}. Please check your network connection or contact the administrator.`,
         );
       },
       ontimeout: () => {
         submitBtn.disabled = false;
-        const msg = "Gửi thất bại: hết thời gian chờ (timeout).";
+        const msg = "Request failed: The request timed out.";
         statusEl.textContent = msg;
         statusEl.className = `${NS}-status ${NS}-status--error`;
         alert(`Issue Reporter: ${msg}`);

@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         Internal Issue Reporter
+// @name         Internal Issue Reporter (v1.0.1)
 // @namespace    internal-issue-reporter
-// @version      1.0.0
+// @version      1.0.1
 // @description  Floating report button: capture a real screenshot via getDisplayMedia(), add a description, and send it to your internal API. No per-repo code changes needed — just add domains to @match below. Uses safe DOM construction (no innerHTML) so it also works on pages with strict Trusted Types CSP, like Gmail.
-// @author       you
+// @author       secret
 // @include      https://*.github.com/*
 // @include      https://*.stackoverflow.com/*
 // @match        https://dev.internal-crm.com/*
@@ -33,11 +33,10 @@
   const NS = "issue-reporter-tm";
   let modalOpen = false;
 
-  // ---------------------------------------------------------------------
   // Small safe DOM builder — avoids innerHTML entirely so this also works
   // on pages that enforce Trusted Types (e.g. Gmail), which throw on any
   // raw innerHTML/outerHTML string assignment.
-  // ---------------------------------------------------------------------
+
   function h(tag, attrs, children) {
     const node = document.createElement(tag);
     attrs = attrs || {};
@@ -61,10 +60,9 @@
     return node;
   }
 
-  // ---------------------------------------------------------------------
   // Settings (stored via GM_setValue, configurable through the Tampermonkey
   // menu — click the extension icon → script menu — no code edit needed).
-  // ---------------------------------------------------------------------
+
   GM_registerMenuCommand("Set API URL", async () => {
     const current = await GM_getValue("apiUrl", "");
     const next = prompt(
@@ -77,10 +75,9 @@
   injectStyles();
   mountFloatingButton();
 
-  // ---------------------------------------------------------------------
   // Styles — GM_addStyle sets .textContent on a <style> tag internally,
   // which Trusted Types does not restrict, so this is safe as-is.
-  // ---------------------------------------------------------------------
+
   function injectStyles() {
     GM_addStyle(`
       .${NS}-fab {
@@ -175,7 +172,6 @@
     openModal(screenshot, lastUserName);
   }
 
-  // ---------------------------------------------------------------------
   // Screenshot via the Screen Capture API. This captures real rendered
   // pixels (like a native screenshot) rather than re-rendering the DOM, so
   // it correctly handles <canvas>-based UIs (e.g. Google Sheets) and is not
@@ -185,7 +181,7 @@
   // "this tab / a window / the entire screen" and confirm sharing — this
   // cannot be skipped or pre-selected for privacy/security reasons. Only
   // one video frame is grabbed, then the capture is stopped immediately.
-  // ---------------------------------------------------------------------
+
   async function captureScreenshot() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
       console.error(

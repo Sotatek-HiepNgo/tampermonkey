@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name         Internal Issue Reporter (v4 - Configurable Shortcut)
-// @namespace    internal-issue-reporter-v2
-// @version      4.0.0
-// @description  Keyboard-shortcut report flow: press a configurable shortcut (default Alt+Shift+R) to capture a real screenshot via getDisplayMedia(), add a description, and send it to your internal API. Shortcut is user-configurable via the Tampermonkey menu. No floating button. Uses safe DOM construction (no innerHTML) so it also works on pages with strict Trusted Types CSP, like Gmail.
-// @author       you
+// @name         Internal Issue Reporter (v4.1.0 - Configurable Shortcut)
+// @namespace    internal-issue-reporter-v4
+// @version      4.1.0
+// @description  Keyboard-shortcut report flow: press a configurable shortcut (default Alt+Shift+R) to capture a real screenshot via getDisplayMedia(), add a description, and send it to your internal API as multipart FormData. Shortcut is user-configurable via the Tampermonkey menu. No floating button. Uses safe DOM construction (no innerHTML) so it also works on pages with strict Trusted Types CSP, like Gmail.
+// @author       secret
 // @include      https://*.github.com/*
 // @include      https://*.stackoverflow.com/*
 // @match        https://dev.internal-crm.com/*
@@ -14,7 +14,6 @@
 // @match        https://docs.google.com/spreadsheets/*
 // @match        https://portal.sotatek.com/*
 // @exclude      https://portal.sotatek.com/admin/*
-// @exclude      https://mail.google.com/mail/u/0/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -33,21 +32,22 @@
   const NS = "issue-reporter-tm";
   let modalOpen = false;
 
-  // ---------------------------------------------------------------------
-  // Hardcoded API endpoint. Sửa dòng dưới đây thành URL API nội bộ thật,
-  // sau đó nhớ cập nhật @connect ở phần metadata phía trên cho khớp domain.
-  // ---------------------------------------------------------------------
+  // Tracks which non-modifier keys are currently held down, so we can
+  // detect chords like "Shift+A+R" (multiple main keys held together),
+  // not just a single modifier + single key.
+  const pressedKeys = new Set();
+
+  // Make sure the @connect metadata matches the domain of the API URL
   const API_URL = "https://webhook.site/cd43d00f-bba5-40a8-8e08-6f526a122c94";
 
-  // Phím tắt mặc định nếu user chưa từng cấu hình.
+  // Default shortcut used if the user has never configured one.
   const DEFAULT_SHORTCUT = "Alt+Shift+R";
-  let currentShortcut = null; // sẽ được nạp async lúc khởi động, xem init()
+  let currentShortcut = null; // loaded asynchronously at startup, see init()
 
-  // ---------------------------------------------------------------------
   // Small safe DOM builder — avoids innerHTML entirely so this also works
   // on pages that enforce Trusted Types (e.g. Gmail), which throw on any
   // raw innerHTML/outerHTML string assignment.
-  // ---------------------------------------------------------------------
+
   function h(tag, attrs, children) {
     const node = document.createElement(tag);
     attrs = attrs || {};
@@ -71,13 +71,15 @@
     return node;
   }
 
-  // ---------------------------------------------------------------------
-  // Shortcut parsing — chấp nhận input viết hoa/thường tuỳ ý, ví dụ tất cả
-  // các dạng sau đều hợp lệ và tương đương nhau:
+  // Shortcut parsing — accepts any mix of upper/lower case input, e.g. all
+  // of the following are valid and equivalent:
   //   "Alt+Shift+R", "alt+shift+r", "ALT+SHIFT+r", "Alt + Shift + R"
-  // Modifier hỗ trợ: ctrl/control, alt/option, shift, meta/cmd/command/win.
-  // Phần còn lại (không phải modifier) được coi là phím chính.
-  // ---------------------------------------------------------------------
+  // Supported modifiers: ctrl/control, alt/option, shift, meta/cmd/command/win.
+  // Anything that isn't a modifier is treated as a main key. Unlike a
+  // single-key shortcut, MULTIPLE main keys are supported as a chord: e.g.
+  // "Shift+A+R" is kept exactly as entered — it requires Shift plus BOTH
+  // "a" and "r" held down at the same time, not just the last one typed.
+
   function parseShortcut(raw) {
     if (!raw || typeof raw !== "string") return null;
 
@@ -93,8 +95,9 @@
       alt: false,
       shift: false,
       meta: false,
-      key: null,
+      keys: [], // ordered, de-duplicated list of main (non-modifier) keys
     };
+    const seenKeys = new Set();
 
     for (const part of parts) {
       if (part === "ctrl" || part === "control") combo.ctrl = true;
@@ -107,10 +110,15 @@
         part === "win"
       )
         combo.meta = true;
-      else combo.key = part; // phím chính, ví dụ "r"
+      else if (!seenKeys.has(part)) {
+        // main key, e.g. "a" or "r" — every non-modifier token is kept,
+        // not just the last one, so "Shift+A+R" stays "Shift+A+R"
+        seenKeys.add(part);
+        combo.keys.push(part);
+      }
     }
 
-    if (!combo.key) return null;
+    if (combo.keys.length === 0) return null;
     return combo;
   }
 
@@ -120,55 +128,70 @@
     if (combo.alt) labelParts.push("Alt");
     if (combo.shift) labelParts.push("Shift");
     if (combo.meta) labelParts.push("Meta");
-    labelParts.push(
-      combo.key.length === 1 ? combo.key.toUpperCase() : combo.key,
+    combo.keys.forEach((k) =>
+      labelParts.push(k.length === 1 ? k.toUpperCase() : k),
     );
     return labelParts.join("+");
   }
 
+  // A chord matches when: the modifier keys are in the expected state, AND
+  // every main key in combo.keys is currently held down (tracked via
+  // pressedKeys, updated by the keydown/keyup listeners below). The event
+  // that completes the chord is whichever of those keys is pressed last.
+  //
+  // Caveat: this depends on the OS/keyboard correctly reporting multiple
+  // simultaneous keys (some keyboards have "ghosting" limits on certain
+  // key combinations), and on the browser/OS not intercepting the combo
+  // first (e.g. some Alt/Meta combos are reserved by the system).
+
   function isShortcutMatch(e, combo) {
     if (!combo) return false;
-    return (
-      e.altKey === combo.alt &&
-      e.shiftKey === combo.shift &&
-      e.ctrlKey === combo.ctrl &&
-      e.metaKey === combo.meta &&
-      e.key.toLowerCase() === combo.key
-    );
+    if (e.repeat) return false; // ignore auto-repeat while a key is held
+    if (
+      e.altKey !== combo.alt ||
+      e.shiftKey !== combo.shift ||
+      e.ctrlKey !== combo.ctrl ||
+      e.metaKey !== combo.meta
+    )
+      return false;
+    return combo.keys.every((k) => pressedKeys.has(k));
   }
 
-  // ---------------------------------------------------------------------
-  // Menu: cho phép user tự đổi phím tắt qua menu Tampermonkey, không cần
-  // sửa code. Lưu trữ dạng string thô (vd "Alt+Shift+R") qua GM_setValue.
-  // ---------------------------------------------------------------------
-  GM_registerMenuCommand("Set Shortcut (phím tắt báo lỗi)", async () => {
-    const current = await GM_getValue("shortcut", DEFAULT_SHORTCUT);
-    const next = prompt(
-      "Nhập tổ hợp phím tắt (ví dụ: Alt+Shift+R, ctrl+alt+t...).\n" +
-        "Viết hoa/thường đều được. Để trống để dùng mặc định (" +
-        DEFAULT_SHORTCUT +
-        "):",
-      current,
-    );
-    if (next === null) return; // user bấm Cancel
+  // Menu: lets the user change the shortcut via the Tampermonkey menu,
+  // without touching the code. Stored as a raw string (e.g. "Alt+Shift+R")
+  // via GM_setValue.
 
-    const trimmed = next.trim();
-    const valueToSave = trimmed === "" ? DEFAULT_SHORTCUT : trimmed;
-    const parsed = parseShortcut(valueToSave);
+  GM_registerMenuCommand(
+    "Set Shortcut (issue report keyboard shortcut)",
+    async () => {
+      const current = await GM_getValue("shortcut", DEFAULT_SHORTCUT);
+      const next = prompt(
+        "Enter the keyboard shortcut (e.g. Alt+Shift+R, ctrl+alt+t...).\n" +
+          "Upper/lower case doesn't matter. Leave empty to use the default (" +
+          DEFAULT_SHORTCUT +
+          "):",
+        current,
+      );
+      if (next === null) return; // user clicked Cancel
 
-    if (!parsed) {
-      alert("Tổ hợp phím không hợp lệ. Vui lòng nhập theo dạng: Alt+Shift+R");
-      return;
-    }
+      const trimmed = next.trim();
+      const valueToSave = trimmed === "" ? DEFAULT_SHORTCUT : trimmed;
+      const parsed = parseShortcut(valueToSave);
 
-    await GM_setValue("shortcut", valueToSave);
-    currentShortcut = parsed;
-    alert(
-      "Đã lưu phím tắt mới: " +
-        formatShortcut(parsed) +
-        "\n(Áp dụng ngay, không cần tải lại trang.)",
-    );
-  });
+      if (!parsed) {
+        alert("Invalid shortcut. Please enter it in the form: Alt+Shift+R");
+        return;
+      }
+
+      await GM_setValue("shortcut", valueToSave);
+      currentShortcut = parsed;
+      alert(
+        "New shortcut saved: " +
+          formatShortcut(parsed) +
+          "\n(Applied immediately, no page reload needed.)",
+      );
+    },
+  );
 
   injectStyles();
   init();
@@ -179,10 +202,9 @@
     registerShortcut();
   }
 
-  // ---------------------------------------------------------------------
   // Styles — GM_addStyle sets .textContent on a <style> tag internally,
   // which Trusted Types does not restrict, so this is safe as-is.
-  // ---------------------------------------------------------------------
+
   function injectStyles() {
     GM_addStyle(`
       .${NS}-toast {
@@ -237,17 +259,30 @@
     `);
   }
 
-  // ---------------------------------------------------------------------
   // Keyboard shortcut. Registered on window with capture=true so it fires
   // even if focus is inside an input/textarea. Note: keydown still counts
   // as a user gesture, so getDisplayMedia() can still be called directly
   // inside this handler.
-  // ---------------------------------------------------------------------
+
   function registerShortcut() {
     window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
+    // If the window/tab loses focus while keys are held, the corresponding
+    // keyup events may never fire — clear the set so nothing gets "stuck"
+    // as held down.
+    window.addEventListener("blur", clearPressedKeys, true);
+  }
+
+  function onKeyUp(e) {
+    pressedKeys.delete(e.key.toLowerCase());
+  }
+
+  function clearPressedKeys() {
+    pressedKeys.clear();
   }
 
   function onKeyDown(e) {
+    pressedKeys.add(e.key.toLowerCase());
     if (!isShortcutMatch(e, currentShortcut)) return;
     if (modalOpen) return;
     e.preventDefault();
@@ -272,7 +307,7 @@
   }
 
   async function onShortcutTriggered() {
-    showToast("🚨 Đang chụp màn hình...");
+    showToast("🚨 Capturing screenshot...");
 
     // Call captureScreenshot() first/synchronously so the getDisplayMedia()
     // permission prompt still counts as triggered by this keypress (user
@@ -288,7 +323,6 @@
     openModal(screenshot, lastUserName);
   }
 
-  // ---------------------------------------------------------------------
   // Screenshot via the Screen Capture API. This captures real rendered
   // pixels (like a native screenshot) rather than re-rendering the DOM, so
   // it correctly handles <canvas>-based UIs (e.g. Google Sheets) and is not
@@ -298,7 +332,7 @@
   // "this tab / a window / the entire screen" and confirm sharing — this
   // cannot be skipped or pre-selected for privacy/security reasons. Only
   // one video frame is grabbed, then the capture is stopped immediately.
-  // ---------------------------------------------------------------------
+
   async function captureScreenshot() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
       console.error(
@@ -362,6 +396,19 @@
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
     } catch (e) {
       console.error("[Issue Reporter] could not open screenshot preview", e);
+    }
+  }
+
+  // Converts a data: URL (from canvas.toDataURL) into a Blob so it can be
+  // appended to FormData as a real file part, instead of a giant base64
+  // text field. Falls back to null on failure (e.g. malformed data URL).
+  async function dataUrlToBlob(dataUrl) {
+    try {
+      const res = await fetch(dataUrl);
+      return await res.blob();
+    } catch (e) {
+      console.error("[Issue Reporter] failed to convert screenshot to Blob", e);
+      return null;
     }
   }
 
@@ -452,7 +499,7 @@
         h("div", { class: `${NS}-meta`, text: context.url }),
         h("div", {
           class: `${NS}-meta`,
-          text: `Mở lại form này bằng phím tắt: ${shortcutLabel} (đổi phím tắt qua menu Tampermonkey → "Set Shortcut")`,
+          text: `Reopen this form with the shortcut: ${shortcutLabel} (change it via the Tampermonkey menu → "Set Shortcut")`,
         }),
         shotSection,
         h("label", {
@@ -516,30 +563,57 @@
     statusEl.textContent = "Sending...";
     statusEl.className = `${NS}-status`;
 
-    const payload = {
-      ...context,
-      userName,
-      description,
-      screenshot: screenshotDataUrl,
-    };
     await GM_setValue("lastUserName", userName);
 
-    // Chưa sửa API_URL thật (vẫn còn placeholder) — báo lỗi ngay, không gửi đi đâu cả.
+    // Real API_URL not set yet (still a placeholder) — fail fast, don't send anywhere.
     if (!API_URL || API_URL.includes("your-internal-api.company.com")) {
       submitBtn.disabled = false;
-      statusEl.textContent = "API URL chưa được cấu hình trong code.";
+      statusEl.textContent = "API URL has not been configured in the code.";
       statusEl.className = `${NS}-status ${NS}-status--error`;
       alert(
-        "Issue Reporter: API URL chưa được cấu hình. Vui lòng báo cho người quản lý script.",
+        "Issue Reporter: the API URL has not been configured. Please notify the script maintainer.",
       );
       return;
+    }
+
+    // ---------------------------------------------------------------------
+    // Build a multipart/form-data payload instead of JSON. The screenshot
+    // is converted from its base64 data: URL into a real Blob/file part,
+    // which avoids ~33% base64 bloat and lets the backend treat it as an
+    // uploaded file (e.g. req.files.screenshot in multer/formidable etc.).
+    // All other fields are sent as plain form fields (strings).
+    // ---------------------------------------------------------------------
+    const formData = new FormData();
+    formData.append("userName", userName);
+    formData.append("description", description);
+    formData.append("url", context.url);
+    formData.append("title", context.title);
+    formData.append("userAgent", context.userAgent);
+    formData.append("screenWidth", String(context.screenWidth));
+    formData.append("screenHeight", String(context.screenHeight));
+    formData.append("devicePixelRatio", String(context.devicePixelRatio));
+    formData.append("timestamp", context.timestamp);
+
+    if (screenshotDataUrl) {
+      const blob = await dataUrlToBlob(screenshotDataUrl);
+      if (blob) {
+        formData.append("screenshot", blob, "screenshot.png");
+      } else {
+        // Fallback: keep the raw data URL as a text field so nothing is
+        // lost if Blob conversion failed for some reason.
+        formData.append("screenshotDataUrl", screenshotDataUrl);
+      }
     }
 
     GM_xmlhttpRequest({
       method: "POST",
       url: API_URL,
-      headers: { "Content-Type": "application/json" },
-      data: JSON.stringify(payload),
+      // IMPORTANT: do NOT set a "Content-Type" header manually here.
+      // The browser/GM_xmlhttpRequest must generate its own multipart
+      // boundary (e.g. "multipart/form-data; boundary=----WebKit...").
+      // Setting it by hand breaks the boundary and the server will fail
+      // to parse the form.
+      data: formData,
       onload: (res) => {
         submitBtn.disabled = false;
         if (res.status >= 200 && res.status < 300) {
@@ -547,26 +621,26 @@
           statusEl.className = `${NS}-status ${NS}-status--success`;
           setTimeout(closeModal, 1200);
         } else {
-          const msg = `Gửi thất bại: HTTP ${res.status}`;
+          const msg = `Send failed: HTTP ${res.status}`;
           statusEl.textContent = msg;
           statusEl.className = `${NS}-status ${NS}-status--error`;
           alert(
-            `Issue Reporter: ${msg}. Vui lòng thử lại hoặc báo lỗi trực tiếp.`,
+            `Issue Reporter: ${msg}. Please try again or report the issue directly.`,
           );
         }
       },
       onerror: (err) => {
         submitBtn.disabled = false;
-        const msg = `Không thể kết nối API: ${err?.error || "network error"}`;
+        const msg = `Could not connect to the API: ${err?.error || "network error"}`;
         statusEl.textContent = msg;
         statusEl.className = `${NS}-status ${NS}-status--error`;
         alert(
-          `Issue Reporter: ${msg}. Kiểm tra lại kết nối mạng hoặc báo cho quản trị viên.`,
+          `Issue Reporter: ${msg}. Check your network connection or notify the administrator.`,
         );
       },
       ontimeout: () => {
         submitBtn.disabled = false;
-        const msg = "Gửi thất bại: hết thời gian chờ (timeout).";
+        const msg = "Send failed: request timed out.";
         statusEl.textContent = msg;
         statusEl.className = `${NS}-status ${NS}-status--error`;
         alert(`Issue Reporter: ${msg}`);
