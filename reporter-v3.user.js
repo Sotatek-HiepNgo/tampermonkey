@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Internal Issue Reporter (v2 - Keyboard Shortcut)
+// @name         Internal Issue Reporter (v3.0.1 - Keyboard Shortcut)
 // @namespace    internal-issue-reporter-v2
-// @version      3.0.0
+// @version      3.0.1
 // @description  Keyboard-shortcut report flow: press Alt+Shift+R to capture a real screenshot via getDisplayMedia(), add a description, and send it to your internal API. No floating button. Uses safe DOM construction (no innerHTML) so it also works on pages with strict Trusted Types CSP, like Gmail.
 // @author       you
 // @include      https://*.github.com/*
