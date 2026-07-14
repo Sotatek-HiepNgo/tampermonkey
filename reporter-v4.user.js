@@ -32,21 +32,13 @@
   const NS = "issue-reporter-tm";
   let modalOpen = false;
 
-  // Tracks which non-modifier keys are currently held down, so we can
-  // detect chords like "Shift+A+R" (multiple main keys held together),
-  // not just a single modifier + single key.
   const pressedKeys = new Set();
 
   // Make sure the @connect metadata matches the domain of the API URL
   const API_URL = "https://webhook.site/cd43d00f-bba5-40a8-8e08-6f526a122c94";
 
-  // Default shortcut used if the user has never configured one.
   const DEFAULT_SHORTCUT = "Alt+Shift+R";
-  let currentShortcut = null; // loaded asynchronously at startup, see init()
-
-  // Small safe DOM builder — avoids innerHTML entirely so this also works
-  // on pages that enforce Trusted Types (e.g. Gmail), which throw on any
-  // raw innerHTML/outerHTML string assignment.
+  let currentShortcut = null;
 
   function h(tag, attrs, children) {
     const node = document.createElement(tag);
@@ -70,15 +62,6 @@
     });
     return node;
   }
-
-  // Shortcut parsing — accepts any mix of upper/lower case input, e.g. all
-  // of the following are valid and equivalent:
-  //   "Alt+Shift+R", "alt+shift+r", "ALT+SHIFT+r", "Alt + Shift + R"
-  // Supported modifiers: ctrl/control, alt/option, shift, meta/cmd/command/win.
-  // Anything that isn't a modifier is treated as a main key. Unlike a
-  // single-key shortcut, MULTIPLE main keys are supported as a chord: e.g.
-  // "Shift+A+R" is kept exactly as entered — it requires Shift plus BOTH
-  // "a" and "r" held down at the same time, not just the last one typed.
 
   function parseShortcut(raw) {
     if (!raw || typeof raw !== "string") return null;
@@ -111,8 +94,6 @@
       )
         combo.meta = true;
       else if (!seenKeys.has(part)) {
-        // main key, e.g. "a" or "r" — every non-modifier token is kept,
-        // not just the last one, so "Shift+A+R" stays "Shift+A+R"
         seenKeys.add(part);
         combo.keys.push(part);
       }
@@ -134,19 +115,9 @@
     return labelParts.join("+");
   }
 
-  // A chord matches when: the modifier keys are in the expected state, AND
-  // every main key in combo.keys is currently held down (tracked via
-  // pressedKeys, updated by the keydown/keyup listeners below). The event
-  // that completes the chord is whichever of those keys is pressed last.
-  //
-  // Caveat: this depends on the OS/keyboard correctly reporting multiple
-  // simultaneous keys (some keyboards have "ghosting" limits on certain
-  // key combinations), and on the browser/OS not intercepting the combo
-  // first (e.g. some Alt/Meta combos are reserved by the system).
-
   function isShortcutMatch(e, combo) {
     if (!combo) return false;
-    if (e.repeat) return false; // ignore auto-repeat while a key is held
+    if (e.repeat) return false;
     if (
       e.altKey !== combo.alt ||
       e.shiftKey !== combo.shift ||
@@ -156,10 +127,6 @@
       return false;
     return combo.keys.every((k) => pressedKeys.has(k));
   }
-
-  // Menu: lets the user change the shortcut via the Tampermonkey menu,
-  // without touching the code. Stored as a raw string (e.g. "Alt+Shift+R")
-  // via GM_setValue.
 
   GM_registerMenuCommand(
     "Set Shortcut (issue report keyboard shortcut)",
@@ -172,7 +139,7 @@
           "):",
         current,
       );
-      if (next === null) return; // user clicked Cancel
+      if (next === null) return; // clicked Cancel
 
       const trimmed = next.trim();
       const valueToSave = trimmed === "" ? DEFAULT_SHORTCUT : trimmed;
@@ -201,9 +168,6 @@
     currentShortcut = parseShortcut(stored) || parseShortcut(DEFAULT_SHORTCUT);
     registerShortcut();
   }
-
-  // Styles — GM_addStyle sets .textContent on a <style> tag internally,
-  // which Trusted Types does not restrict, so this is safe as-is.
 
   function injectStyles() {
     GM_addStyle(`
@@ -259,17 +223,9 @@
     `);
   }
 
-  // Keyboard shortcut. Registered on window with capture=true so it fires
-  // even if focus is inside an input/textarea. Note: keydown still counts
-  // as a user gesture, so getDisplayMedia() can still be called directly
-  // inside this handler.
-
   function registerShortcut() {
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("keyup", onKeyUp, true);
-    // If the window/tab loses focus while keys are held, the corresponding
-    // keyup events may never fire — clear the set so nothing gets "stuck"
-    // as held down.
     window.addEventListener("blur", clearPressedKeys, true);
   }
 
@@ -307,11 +263,8 @@
   }
 
   async function onShortcutTriggered() {
-    showToast("🚨 Capturing screenshot...");
+    showToast("Capturing screenshot...");
 
-    // Call captureScreenshot() first/synchronously so the getDisplayMedia()
-    // permission prompt still counts as triggered by this keypress (user
-    // activation can be lost if too many awaits happen before it).
     const screenshotPromise = captureScreenshot();
     const lastUserNamePromise = GM_getValue("lastUserName", "");
     const [screenshot, lastUserName] = await Promise.all([
@@ -322,16 +275,6 @@
     hideToast();
     openModal(screenshot, lastUserName);
   }
-
-  // Screenshot via the Screen Capture API. This captures real rendered
-  // pixels (like a native screenshot) rather than re-rendering the DOM, so
-  // it correctly handles <canvas>-based UIs (e.g. Google Sheets) and is not
-  // blocked by page CSP/Trusted Types (e.g. Gmail) the way html2canvas was.
-  //
-  // Trade-off: the browser shows a native picker asking the user to choose
-  // "this tab / a window / the entire screen" and confirm sharing — this
-  // cannot be skipped or pre-selected for privacy/security reasons. Only
-  // one video frame is grabbed, then the capture is stopped immediately.
 
   async function captureScreenshot() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
@@ -378,15 +321,10 @@
       console.error("[Issue Reporter] failed to read captured frame", e);
       return null;
     } finally {
-      // Stop sharing immediately after grabbing one frame, so the browser's
-      // "you are sharing your screen" indicator disappears right away.
       stream.getTracks().forEach((t) => t.stop());
     }
   }
 
-  // Chrome blocks top-level navigation to large `data:` URLs (shows
-  // about:blank instead of the content). Converting to a `blob:` URL first
-  // works around this and is safe to navigate to.
   async function openScreenshotPreview(dataUrl) {
     try {
       const blob = await (await fetch(dataUrl)).blob();
@@ -399,9 +337,6 @@
     }
   }
 
-  // Converts a data: URL (from canvas.toDataURL) into a Blob so it can be
-  // appended to FormData as a real file part, instead of a giant base64
-  // text field. Falls back to null on failure (e.g. malformed data URL).
   async function dataUrlToBlob(dataUrl) {
     try {
       const res = await fetch(dataUrl);
@@ -493,7 +428,7 @@
       },
       [
         h("div", { class: `${NS}-header` }, [
-          h("h3", { id: `${NS}-title`, text: "🚨 Report an issue" }),
+          h("h3", { id: `${NS}-title`, text: "Report an issue" }),
           closeBtn,
         ]),
         h("div", { class: `${NS}-meta`, text: context.url }),
@@ -565,7 +500,7 @@
 
     await GM_setValue("lastUserName", userName);
 
-    // Real API_URL not set yet (still a placeholder) — fail fast, don't send anywhere.
+    // Real API_URL not set yet
     if (!API_URL || API_URL.includes("your-internal-api.company.com")) {
       submitBtn.disabled = false;
       statusEl.textContent = "API URL has not been configured in the code.";
@@ -576,13 +511,6 @@
       return;
     }
 
-    // ---------------------------------------------------------------------
-    // Build a multipart/form-data payload instead of JSON. The screenshot
-    // is converted from its base64 data: URL into a real Blob/file part,
-    // which avoids ~33% base64 bloat and lets the backend treat it as an
-    // uploaded file (e.g. req.files.screenshot in multer/formidable etc.).
-    // All other fields are sent as plain form fields (strings).
-    // ---------------------------------------------------------------------
     const formData = new FormData();
     formData.append("userName", userName);
     formData.append("description", description);
@@ -599,8 +527,6 @@
       if (blob) {
         formData.append("screenshot", blob, "screenshot.png");
       } else {
-        // Fallback: keep the raw data URL as a text field so nothing is
-        // lost if Blob conversion failed for some reason.
         formData.append("screenshotDataUrl", screenshotDataUrl);
       }
     }
@@ -608,11 +534,6 @@
     GM_xmlhttpRequest({
       method: "POST",
       url: API_URL,
-      // IMPORTANT: do NOT set a "Content-Type" header manually here.
-      // The browser/GM_xmlhttpRequest must generate its own multipart
-      // boundary (e.g. "multipart/form-data; boundary=----WebKit...").
-      // Setting it by hand breaks the boundary and the server will fail
-      // to parse the form.
       data: formData,
       onload: (res) => {
         submitBtn.disabled = false;

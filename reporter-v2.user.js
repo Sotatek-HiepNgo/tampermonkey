@@ -35,10 +35,6 @@
   // update @connect metadata is correct with domain of API URL
   const API_URL = "https://webhook.site/cd43d00f-bba5-40a8-8e08-6f526a122c94";
 
-  // Small safe DOM builder — avoids innerHTML entirely so this also works
-  // on pages that enforce Trusted Types (e.g. Gmail), which throw on any
-  // raw innerHTML/outerHTML string assignment.
-
   function h(tag, attrs, children) {
     const node = document.createElement(tag);
     attrs = attrs || {};
@@ -64,9 +60,6 @@
 
   injectStyles();
   mountFloatingButton();
-
-  // Styles — GM_addStyle sets .textContent on a <style> tag internally,
-  // which Trusted Types does not restrict, so this is safe as-is.
 
   function injectStyles() {
     GM_addStyle(`
@@ -146,9 +139,6 @@
     btn.disabled = true;
     btn.classList.add(`${NS}-fab--busy`);
 
-    // Call captureScreenshot() first/synchronously so the getDisplayMedia()
-    // permission prompt still counts as triggered by this click (user
-    // activation can be lost if too many awaits happen before it).
     const screenshotPromise = captureScreenshot();
     const lastUserNamePromise = GM_getValue("lastUserName", "");
     const [screenshot, lastUserName] = await Promise.all([
@@ -161,16 +151,6 @@
 
     openModal(screenshot, lastUserName);
   }
-
-  // Screenshot via the Screen Capture API. This captures real rendered
-  // pixels (like a native screenshot) rather than re-rendering the DOM, so
-  // it correctly handles <canvas>-based UIs (e.g. Google Sheets) and is not
-  // blocked by page CSP/Trusted Types (e.g. Gmail) the way html2canvas was.
-  //
-  // Trade-off: the browser shows a native picker asking the user to choose
-  // "this tab / a window / the entire screen" and confirm sharing — this
-  // cannot be skipped or pre-selected for privacy/security reasons. Only
-  // one video frame is grabbed, then the capture is stopped immediately.
 
   async function captureScreenshot() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
@@ -217,15 +197,10 @@
       console.error("[Issue Reporter] failed to read captured frame", e);
       return null;
     } finally {
-      // Stop sharing immediately after grabbing one frame, so the browser's
-      // "you are sharing your screen" indicator disappears right away.
       stream.getTracks().forEach((t) => t.stop());
     }
   }
 
-  // Chrome blocks top-level navigation to large `data:` URLs (shows
-  // about:blank instead of the content). Converting to a `blob:` URL first
-  // works around this and is safe to navigate to.
   async function openScreenshotPreview(dataUrl) {
     try {
       const blob = await (await fetch(dataUrl)).blob();
@@ -238,9 +213,6 @@
     }
   }
 
-  // Converts a data: URL (from canvas.toDataURL) into a Blob so it can be
-  // appended to FormData as a real file part, instead of a giant base64
-  // text field. Falls back to null on failure (e.g. malformed data URL).
   async function dataUrlToBlob(dataUrl) {
     try {
       const res = await fetch(dataUrl);
@@ -396,8 +368,7 @@
 
     await GM_setValue("lastUserName", userName);
 
-    // Real API_URL has not been configured yet (still using the placeholder)
-    // — report an error immediately and do not send any request.
+    // Real API_URL has not been configured yet
     if (!API_URL || API_URL.includes("your-internal-api.company.com")) {
       submitBtn.disabled = false;
       statusEl.textContent = "API URL has not been configured in the script.";
@@ -408,13 +379,6 @@
       return;
     }
 
-    // ---------------------------------------------------------------------
-    // Build a multipart/form-data payload instead of JSON. The screenshot
-    // is converted from its base64 data: URL into a real Blob/file part,
-    // which avoids ~33% base64 bloat and lets the backend treat it as an
-    // uploaded file (e.g. req.files.screenshot in multer/formidable etc.).
-    // All other fields are sent as plain form fields (strings).
-    // ---------------------------------------------------------------------
     const formData = new FormData();
     formData.append("userName", userName);
     formData.append("description", description);
@@ -431,8 +395,6 @@
       if (blob) {
         formData.append("screenshot", blob, "screenshot.png");
       } else {
-        // Fallback: keep the raw data URL as a text field so nothing is
-        // lost if Blob conversion failed for some reason.
         formData.append("screenshotDataUrl", screenshotDataUrl);
       }
     }
@@ -440,11 +402,6 @@
     GM_xmlhttpRequest({
       method: "POST",
       url: API_URL,
-      // IMPORTANT: do NOT set a "Content-Type" header manually here.
-      // The browser/GM_xmlhttpRequest must generate its own multipart
-      // boundary (e.g. "multipart/form-data; boundary=----WebKit...").
-      // Setting it by hand breaks the boundary and the server will fail
-      // to parse the form.
       data: formData,
       onload: (res) => {
         submitBtn.disabled = false;
