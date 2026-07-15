@@ -6,14 +6,10 @@
 // @author       Sotatek
 // @include      https://*.github.com/*
 // @include      https://*.stackoverflow.com/*
-// @match        https://dev.internal-crm.com/*
-// @match        https://staging.pbx-tool.com/*
 // @match        https://mail.google.com/*
 // @match        http://localhost:*/*
 // @match        https://ant.design/*
 // @match        https://docs.google.com/spreadsheets/*
-// @match        https://portal.sotatek.com/*
-// @exclude      https://portal.sotatek.com/admin/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
