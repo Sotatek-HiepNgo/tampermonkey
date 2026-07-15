@@ -3,7 +3,7 @@
 // @namespace    internal-issue-reporter-v4
 // @version      4.1.0
 // @description  Keyboard-shortcut report flow: press a configurable shortcut (default Alt+Shift+R) to capture a real screenshot via getDisplayMedia(), add a description, and send it to your internal API as multipart FormData. Shortcut is user-configurable via the Tampermonkey menu. No floating button. Uses safe DOM construction (no innerHTML) so it also works on pages with strict Trusted Types CSP, like Gmail.
-// @author       secret
+// @author       Sotatek
 // @include      https://*.github.com/*
 // @include      https://*.stackoverflow.com/*
 // @match        https://dev.internal-crm.com/*

@@ -3,7 +3,7 @@
 // @namespace    internal-issue-reporter
 // @version      2.1.0
 // @description  Floating report button: capture a real screenshot via getDisplayMedia(), add a description, and send it to your internal API as multipart FormData. No per-repo code changes needed — just add domains to @match below. Uses safe DOM construction (no innerHTML) so it also works on pages with strict Trusted Types CSP, like Gmail.
-// @author       secret
+// @author       Sotatek
 // @include      https://*.github.com/*
 // @include      https://*.stackoverflow.com/*
 // @match        https://dev.internal-crm.com/*

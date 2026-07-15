@@ -3,7 +3,7 @@
 // @namespace    internal-issue-reporter-v3
 // @version      3.1.0
 // @description  Keyboard-shortcut report flow: press Alt+Shift+R to capture a real screenshot via getDisplayMedia(), add a description, and send it to your internal API as multipart FormData. No floating button. Uses safe DOM construction (no innerHTML) so it also works on pages with strict Trusted Types CSP, like Gmail.
-// @author       secret
+// @author       Sotatek
 // @include      https://*.github.com/*
 // @include      https://*.stackoverflow.com/*
 // @match        https://dev.internal-crm.com/*
